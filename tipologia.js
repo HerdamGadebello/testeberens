@@ -189,38 +189,205 @@ function assinaturaObservada(eixos) {
   return a;
 }
 
-/* ---------- checagens de coerencia interna da tabela ---------- */
-/* A tabela dos 16 tipos so tem 4 graus de liberdade. Dois eixos sao
-   deriváveis dos outros, e isso vira controle de consistencia. */
-function checagens(obs) {
-  /* Enfoque = Organizacao XOR Interpretacao (e o mesmo par que define o temperamento) */
-  const parEsperado =
-    (obs.interpretacao === 'MATERIALISTA') === (obs.organizacao === 'AFILIATIVO')
-      ? 'SISTEMÁTICO'
-      : 'INTERESSADO';
-  const posturaEsperada =
-    (obs.orientacao === 'RESPONDEDOR' && obs.comunicacao === 'DIRECIONADO') ||
-    (obs.orientacao === 'INICIADOR' && obs.comunicacao === 'INFORMATIVO')
-      ? 'MOVIMENTADO'
-      : 'CONTROLADO';
-  return [
-    {
-      nome: 'Enfoque × (Organização + Interpretação)',
-      regra:
-        'Nos 16 tipos, SISTEMÁTICO aparece exatamente nos cruzamentos MATERIALISTA+AFILIATIVO (Sentinelas) e IMATERIALISTA+PRAGMÁTICO (Teóricos); os outros dois cruzamentos dão INTERESSADO.',
-      esperado: parEsperado,
-      observado: obs.enfoque,
-      ok: obs.enfoque === parEsperado,
-    },
-    {
-      nome: 'Postura × (Orientação + Comunicação)',
-      regra:
-        'Em todos os 16 tipos, MOVIMENTADO aparece quando RESPONDEDOR+DIRECIONADO ou INICIADOR+INFORMATIVO; os outros dois cruzamentos dão CONTROLADO.',
-      esperado: posturaEsperada,
-      observado: obs.postura,
-      ok: obs.postura === posturaEsperada,
-    },
-  ];
+/* ---------- eixos derivaveis: previsao x resposta ----------
+   A tabela dos 16 tipos tem 6 colunas e apenas 4 graus de liberdade: Enfoque e
+   Postura sao previsiveis a partir dos outros quatro eixos em TODAS as 16
+   linhas (verificado). Logo isso nao e um teste de erro — e uma previsao que
+   acerta ou nao. O tipo atribuido satisfaz as duas regras por construcao;
+   quem pode divergir sao os POLOS CRUS da pessoa.
+   ========================================================================= */
+
+/* limiares vindos de FAIXAS (engine.js) — fonte unica */
+const LIMIAR_INDIFERENCIADO = FAIXAS[0].max; // < 0,07 -> empate pratico
+const LIMIAR_CLARO = FAIXAS[1].max; // >= 0,2 -> tendencia clara
+
+const DERIVAVEIS = [
+  {
+    eixoId: 'enfoque',
+    deps: ['organizacao', 'interpretacao'],
+    regra:
+      'Nos 16 tipos, SISTEMÁTICO aparece exatamente nos cruzamentos MATERIALISTA+AFILIATIVO (Sentinelas) e IMATERIALISTA+PRAGMÁTICO (Teóricos); os outros dois cruzamentos dão INTERESSADO.',
+    prever: (a) =>
+      (a.interpretacao === 'MATERIALISTA') === (a.organizacao === 'AFILIATIVO') ? 'SISTEMÁTICO' : 'INTERESSADO',
+  },
+  {
+    eixoId: 'postura',
+    deps: ['orientacao', 'comunicacao'],
+    regra:
+      'Em todos os 16 tipos, MOVIMENTADO aparece quando RESPONDEDOR+DIRECIONADO ou INICIADOR+INFORMATIVO; os outros dois cruzamentos dão CONTROLADO.',
+    prever: (a) =>
+      (a.orientacao === 'RESPONDEDOR' && a.comunicacao === 'DIRECIONADO') ||
+      (a.orientacao === 'INICIADOR' && a.comunicacao === 'INFORMATIVO')
+        ? 'MOVIMENTADO'
+        : 'CONTROLADO',
+  },
+];
+
+/* Quatro estados = veredito x firmeza. "Diverge fragil" e ruido de medicao e
+   NAO deve ser pintado de vermelho; so "diverge firme" merece alarme. */
+const VEREDITOS = {
+  confirma: {
+    id: 'confirma',
+    rotulo: 'confirma a regra',
+    tom: 'pos',
+    resumo: 'A regra se sustenta no seu caso, e com eixos firmes o bastante para isso significar algo.',
+  },
+  'confirma-fraco': {
+    id: 'confirma-fraco',
+    rotulo: 'confirma sem força',
+    tom: 'neutro',
+    resumo:
+      'A previsão bateu, mas ao menos um dos eixos envolvidos ficou sem tendência clara — então a coincidência tem pouco valor informativo.',
+  },
+  'diverge-fragil': {
+    id: 'diverge-fragil',
+    rotulo: 'divergência frágil',
+    tom: 'neutro',
+    resumo:
+      'A previsão caiu no lado oposto, mas por causa de um eixo quase empatado. É ruído de medição, não contradição: esse eixo troca de lado entre duas aplicações do teste.',
+  },
+  'diverge-firme': {
+    id: 'diverge-firme',
+    rotulo: 'divergência firme',
+    tom: 'neg',
+    resumo:
+      'A previsão caiu no lado oposto com todos os eixos envolvidos bem definidos. Ou você é exceção real à tabela, ou algum item está mal calibrado.',
+  },
+};
+
+function pctDoPolo(r, polo) {
+  return polo === r.eixo.pos.code ? r.pctPos : r.pctNeg;
+}
+
+function pctTxt(n) {
+  return `${n.toFixed(1).replace('.', ',')}%`;
+}
+
+function checagens(obs, porId, tipoAtribuido) {
+  return DERIVAVEIS.map((d) => {
+    const previsto = d.prever(obs);
+    const observado = obs[d.eixoId];
+    const bate = observado === previsto;
+
+    const descreve = (id) => {
+      const r = porId[id];
+      return {
+        eixoId: id,
+        eixoNome: r.eixo.nome,
+        polo: obs[id],
+        pct: pctDoPolo(r, obs[id]),
+        intensidade: r.intensidade,
+        faixa: r.faixa.rotulo,
+        firme: r.intensidade >= LIMIAR_CLARO,
+        indiferenciado: r.intensidade < LIMIAR_INDIFERENCIADO,
+      };
+    };
+
+    const entradas = d.deps.map(descreve);
+    const alvo = descreve(d.eixoId);
+    const envolvidos = entradas.concat([alvo]);
+    const frouxos = envolvidos.filter((e) => !e.firme).sort((a, b) => a.intensidade - b.intensidade);
+
+    const veredito = bate
+      ? frouxos.length
+        ? VEREDITOS['confirma-fraco']
+        : VEREDITOS.confirma
+      : frouxos.length
+        ? VEREDITOS['diverge-fragil']
+        : VEREDITOS['diverge-firme'];
+
+    const poloDoTipo = tipoAtribuido ? tipoAtribuido[d.eixoId] : null;
+
+    return {
+      eixoId: d.eixoId,
+      eixoNome: alvo.eixoNome,
+      nome: `${alvo.eixoNome} × (${entradas.map((e) => e.eixoNome).join(' + ')})`,
+      regra: d.regra,
+      entradas,
+      alvo,
+      previsto,
+      observado,
+      pctObservado: alvo.pct,
+      bate,
+      veredito,
+      eloFraco: frouxos[0] || null,
+      /* a linha do tipo atribuido SEMPRE satisfaz a regra — explicito para o
+         template poder afirmar isso em vez de deixar o leitor supor o contrario */
+      tipoAtribuido: poloDoTipo,
+      tipoAtribuidoSatisfaz: tipoAtribuido ? d.prever(tipoAtribuido) === poloDoTipo : true,
+      /* compatibilidade com codigo antigo */
+      esperado: previsto,
+      ok: bate,
+    };
+  });
+}
+
+/* ---------- sintese em prosa do painel de reconciliacao ----------
+   Usada identicamente pela tela e pelo PDF, para os dois nunca divergirem. */
+function frasesReconciliacao(tip) {
+  const v = tip.vencedor;
+  const chk = tip.checagens;
+  const divergem = v.linhas.filter((l) => !l.bate);
+  const batem = v.linhas.length - divergem.length;
+  const fr = [];
+
+  fr.push(
+    `Dos seis eixos, quatro são livres e dois — ${chk
+      .map((c) => c.eixoNome)
+      .join(' e ')} — são deriváveis dos outros. O tipo atribuído (${v.tipo}) satisfaz as duas regras de derivação, como todas as 16 linhas da tabela. O que segue compara as regras e a linha do tipo com as suas respostas cruas, não com o seu tipo.`,
+  );
+
+  if (!divergem.length) {
+    fr.push(`As suas seis respostas coincidem com a linha de ${v.tipo}.`);
+  } else {
+    const descrever = (ls) =>
+      ls
+        .map((l) => `${l.eixoNome} (${l.observado}, ${pctTxt(l.pctObservado)}, ${l.faixa.toLowerCase()})`)
+        .join(' e ');
+    const soltos = divergem.filter((l) => l.indefinido);
+    const duros = divergem.filter((l) => !l.indefinido);
+    const partes = [`${batem} das suas seis respostas coincidem com a linha de ${v.tipo}.`];
+    if (soltos.length) {
+      partes.push(
+        `${soltos.length === 1 ? 'Um eixo ficou' : `${soltos.length} eixos ficaram`} indiferenciado${
+          soltos.length === 1 ? '' : 's'
+        } — os dois polos praticamente empatados, sem lado definido a comparar: ${descrever(soltos)}.`,
+      );
+    }
+    if (duros.length) {
+      partes.push(
+        `${duros.length === 1 ? 'A diferença de fato está' : 'As diferenças de fato estão'} em ${descrever(
+          duros,
+        )}, com lado definido e contrário ao da linha do tipo.`,
+      );
+    }
+    fr.push(partes.join(' '));
+  }
+
+  const fragil = chk.filter((c) => c.veredito.id === 'diverge-fragil');
+  const firme = chk.filter((c) => c.veredito.id === 'diverge-firme');
+
+  fragil.forEach((c) => {
+    fr.push(
+      `A previsão de ${c.eixoNome} caiu no lado oposto ao que você respondeu, e o elo fraco é ${
+        c.eloFraco.eixoNome
+      }, em ${pctTxt(c.eloFraco.pct)} — ${c.eloFraco.faixa.toLowerCase()}. Um eixo nesse estado troca de lado entre duas aplicações do teste, e foi ele que virou a previsão. Nada aqui contradiz ${
+        v.tipo
+      }: indica que o eixo ${c.eloFraco.eixoNome} não foi medido com firmeza suficiente e vale reaplicar.`,
+    );
+  });
+
+  firme.forEach((c) => {
+    fr.push(
+      `A previsão de ${c.eixoNome} caiu no lado oposto com todos os eixos envolvidos bem definidos: ${c.entradas
+        .map((e) => `${e.eixoNome} ${e.polo} (${pctTxt(e.pct)})`)
+        .join(' e ')} preveem ${c.previsto}, e você respondeu ${c.observado} com ${pctTxt(
+        c.pctObservado,
+      )}. Esta é a divergência que vale investigar: ou a sua combinação é uma das 48 que a tabela não cobre, ou algum item desses eixos está medindo outra coisa.`,
+    );
+  });
+
+  return fr;
 }
 
 /* ---------- motor de tipagem ---------- */
@@ -244,9 +411,13 @@ function rankear(eixos, porId, ordem, pesos) {
         esperado,
         observado,
         pctEsperado: esperado === r.eixo.pos.code ? r.pctPos : r.pctNeg,
+        pctObservado: observado === r.eixo.pos.code ? r.pctPos : r.pctNeg,
+        intensidade: r.intensidade,
+        faixa: r.faixa.rotulo,
+        firme: r.intensidade >= LIMIAR_CLARO,
         alinhamento: a,
         bate: esperado === observado,
-        indefinido: r.intensidade < 0.07,
+        indefinido: r.intensidade < LIMIAR_INDIFERENCIADO,
       };
     });
     return {
@@ -364,6 +535,7 @@ function tiparPerfil(eixos, opcoes) {
 
   const vencedor = ranking[0];
   const margem = vencedor.bruto - ranking[1].bruto;
+  const chk = checagens(obs, porId, vencedor);
 
   return {
     vencedor,
@@ -377,11 +549,14 @@ function tiparPerfil(eixos, opcoes) {
     temperamentoDoTipo: TEMPERAMENTOS[vencedor.temp],
     expressao: EXPRESSOES[siglaExpressao(obs)],
     expressaoDoTipo: EXPRESSOES[siglaExpressao(vencedor)],
-    checagens: checagens(obs),
+    checagens: chk,
     calibragem: cal,
     ordemUsada: {
       nome: cal.nome,
       detalhe: cal.detalhe,
+    },
+    get reconciliacao() {
+      return frasesReconciliacao(this);
     },
   };
 }
