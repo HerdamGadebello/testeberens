@@ -342,15 +342,25 @@ function renderTipo(tip, res) {
   const divergem = v.linhas.filter((l) => !l.bate && !l.indefinido);
   const indefinidos = v.linhas.filter((l) => l.indefinido);
 
+  const porEixoChk = {};
+  tip.checagens.forEach((c) => (porEixoChk[c.eixoId] = c));
+
   const linhas = v.linhas
     .map((l) => {
       const cls = l.indefinido ? 'indef' : l.bate ? 'bate' : 'diverge';
-      const marca = l.indefinido ? 'indefinido' : l.bate ? 'converge' : 'diverge';
+      const marca = l.indefinido ? 'indiferenciado' : l.bate ? 'coincide' : 'difere';
+      const c = porEixoChk[l.eixoId];
+      const regra = c
+        ? `<strong>${c.previsto}</strong><span class="res-faixa">derivável de ${c.entradas
+            .map((e) => e.eixoNome)
+            .join(' + ')}</span>`
+        : `<span class="td-vazio" title="Eixo livre: nenhuma regra o prevê">eixo livre</span>`;
       return `<tr class="${cls}">
         <td class="td-pri">${l.prioridade}</td>
-        <td>${l.eixoNome}</td>
-        <td><strong>${l.esperado}</strong></td>
-        <td>${l.observado} <span class="res-faixa">${pct(l.pctEsperado)} no polo do tipo</span></td>
+        <td><strong>${l.eixoNome}</strong></td>
+        <td data-rot="você respondeu"><strong>${l.observado}</strong> <span class="res-faixa">${pct(l.pctObservado)} · ${l.faixa.toLowerCase()}</span></td>
+        <td data-rot="linha de ${v.tipo}">${l.esperado} <span class="res-faixa">${pct(l.pctEsperado)} no polo do tipo</span></td>
+        <td data-rot="a regra prevê">${regra}</td>
         <td class="td-marca">${marca}</td>
       </tr>`;
     })
@@ -361,12 +371,32 @@ function renderTipo(tip, res) {
     : `<p class="tipo-exato">A sua assinatura de seis polos não existe na tabela — o que é o caso mais comum, já que a tabela cobre 16 das 64 combinações possíveis. O tipo acima é a melhor aproximação.</p>`;
 
   const chk = tip.checagens
-    .map(
-      (c) => `<li class="${c.ok ? 'ok' : 'falha'}">
-        <strong>${c.nome} — ${c.ok ? 'coerente' : 'incoerente'}.</strong>
-        ${c.regra} Pelos seus outros eixos, o esperado era <strong>${c.esperado}</strong>; você respondeu <strong>${c.observado}</strong>.
-      </li>`,
-    )
+    .map((c) => {
+      const ent = c.entradas
+        .map((e) => `<strong>${e.polo}</strong> em ${e.eixoNome} (${pct(e.pct)}, ${e.faixa.toLowerCase()})`)
+        .join(' + ');
+      const elo =
+        c.eloFraco && !c.bate
+          ? `<p class="chk-elo">Elo fraco: <strong>${c.eloFraco.eixoNome}</strong>, ${pct(
+              c.eloFraco.pct,
+            )} — ${c.eloFraco.faixa.toLowerCase()}. É esse eixo que vira a previsão, e ele pode cair do outro lado numa reaplicação.</p>`
+          : c.eloFraco
+            ? `<p class="chk-elo">Bateu, mas <strong>${c.eloFraco.eixoNome}</strong> ficou em ${pct(
+                c.eloFraco.pct,
+              )} (${c.eloFraco.faixa.toLowerCase()}), então a coincidência diz pouco.</p>`
+            : '';
+      return `<li class="chk-${c.veredito.tom}">
+        <p class="chk-topo"><strong>${c.eixoNome}</strong> <span class="chk-veredito">${c.veredito.rotulo}</span></p>
+        <p class="chk-linha">A regra prevê ${c.eixoNome} a partir de ${c.entradas
+          .map((e) => e.eixoNome)
+          .join(' × ')}. As suas respostas nesses eixos dão ${ent}, cruzamento que prevê
+          <strong>${c.previsto}</strong>; você respondeu <strong>${c.observado}</strong> com ${pct(c.pctObservado)}.</p>
+        ${elo}
+        <p class="chk-nota">${c.veredito.resumo}</p>
+        <p class="chk-nota">Na tabela, ${v.tipo} é <strong>${c.tipoAtribuido}</strong> nesse eixo e satisfaz a regra
+          — como todas as 16 linhas. ${c.regra}</p>
+      </li>`;
+    })
     .join('');
 
   const tmp = tip.temperamentoDoTipo;
@@ -397,35 +427,30 @@ function renderTipo(tip, res) {
         : ''
     }
     ${exato}
-    ${
-      divergem.length
-        ? `<p class="painel-intro" style="margin-top:var(--space-5)">Divergiram do tipo escolhido: ${divergem
-            .map(
-              (l) =>
-                `<strong>${l.eixoNome}</strong> (prioridade ${l.prioridade} — o tipo pede ${l.esperado}, veio ${l.observado})`,
-            )
-            .join('; ')}. O tipo foi decidido pelos eixos de prioridade mais alta, que têm peso maior que a soma de todos os de baixo.</p>`
-        : ''
-    }
-    ${
-      indefinidos.length
-        ? `<p class="painel-intro" style="margin-top:var(--space-3)">Ficaram indiferenciados (praticamente 50/50, então quase não pesaram na decisão): ${indefinidos
-            .map((l) => `<strong>${l.eixoNome}</strong>`)
-            .join(', ')}.</p>`
-        : ''
-    }
-    <table class="tab-tipo">
-      <thead><tr><th>Pri.</th><th>Eixo</th><th>O tipo pede</th><th>Você respondeu</th><th></th></tr></thead>
-      <tbody>${linhas}</tbody>
-    </table>
 
-    ${retratoTipo(v.tipo)}
-
-    <div class="nota-bloco" style="margin-top:var(--space-8)">
-      <h3>Checagens de coerência da tabela</h3>
-      <p>A tabela dos 16 tipos tem 6 colunas, mas só 4 graus de liberdade: dois eixos são deriváveis dos outros em todas as 16 linhas. Isso transforma esses dois eixos em controle de consistência da resposta.</p>
+    <section class="recon">
+      <h3 class="recon-titulo">Onde as suas respostas e o seu tipo não coincidem</h3>
+      ${tip.reconciliacao.map((f) => `<p class="painel-intro">${f}</p>`).join('')}
+      <table class="tab-tipo tab-recon">
+        <thead><tr>
+          <th>Pri.</th><th>Eixo</th><th>Você respondeu</th><th>Linha de ${v.tipo}</th>
+          <th>A regra prevê</th><th>Resposta × tipo</th>
+        </tr></thead>
+        <tbody>${linhas}</tbody>
+      </table>
+      ${
+        divergem.length
+          ? `<p class="painel-intro recon-nota">O tipo foi decidido pelos eixos de prioridade mais alta, que têm peso maior que a soma de todos os de baixo — por isso uma diferença num eixo de prioridade baixa, ou num eixo indiferenciado, quase não muda o resultado.</p>`
+          : ''
+      }
+      <h4 class="recon-sub">Os dois eixos deriváveis, em detalhe</h4>
+      <p class="painel-intro">A tabela tem seis colunas e apenas quatro graus de liberdade: ${tip.checagens
+        .map((c) => c.eixoNome)
+        .join(' e ')} são previsíveis a partir dos outros quatro em todas as 16 linhas. Abaixo, a previsão de cada regra contra a sua resposta. Isto não avalia o seu tipo — avalia a firmeza das suas respostas.</p>
       <ul class="lista-chk">${chk}</ul>
-    </div>`;
+    </section>
+
+    ${retratoTipo(v.tipo)}`;
 
   // ranking completo
   el('bloco-ranking').innerHTML = `
@@ -543,4 +568,3 @@ function ativarAba(nome) {
   document.querySelectorAll('.painel').forEach((p) => p.classList.toggle('ativo', p.dataset.painel === nome));
 }
 document.querySelectorAll('.aba').forEach((a) => a.addEventListener('click', () => ativarAba(a.dataset.aba)));
-
