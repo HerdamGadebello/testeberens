@@ -357,37 +357,63 @@ async function gerarPdf() {
     ctx.olho('Os seis eixos');
     ctx.titulo('Sua porcentagem em cada dicotomia');
     ctx.texto(
-      'A porcentagem sai da média ponderada de cada polo separadamente, então os dois lados sempre somam 100%. A intensidade é o quanto o eixo está definido: abaixo de 7% de distância do empate, o eixo é tratado como indiferenciado.',
+      'A porcentagem sai da média ponderada de cada polo separadamente, então os dois lados sempre somam 100% — e por isso ela fica naturalmente perto de 50%. O número que diz se o eixo está realmente definido é a distância do empate, na última coluna: abaixo de 7 pontos o eixo é tratado como indiferenciado e recebe um traço no lugar do polo.',
       { tam: 9, cor: PDF_COR.fraca },
     );
     ctx.y += 3;
     ctx.tabela(
       [
-        { t: 'Eixo', w: 32 },
-        { t: 'Polo dominante', w: 36 },
-        { t: '%', w: 18, al: 'right' },
-        { t: 'Outro polo', w: 36 },
-        { t: '%', w: 18, al: 'right' },
-        { t: 'Intensidade', w: 34 },
+        { t: 'Eixo', w: 30 },
+        { t: 'Polo dominante', w: 34 },
+        { t: 'Força', w: 30 },
+        { t: '%', w: 16, al: 'right' },
+        { t: 'Outro polo', w: 30 },
+        { t: '%', w: 16, al: 'right' },
+        { t: 'Do empate', w: 18, al: 'right' },
       ],
       res.eixos.map((r) => {
         const dom = r.dominante === 'pos' ? r.eixo.pos : r.eixo.neg;
         const out = r.dominante === 'pos' ? r.eixo.neg : r.eixo.pos;
         const pDom = r.dominante === 'pos' ? r.pctPos : r.pctNeg;
+        /* eixo indiferenciado: espelha o traço da tela e perde o negrito, para
+           não sugerir um polo que na prática empatou */
+        const mudo = r.intensidade < LIMIAR_INDIFERENCIADO;
+        const frouxo = r.intensidade < LIMIAR_CLARO;
+        const corDom = mudo ? PDF_COR.fraca : r.dominante === 'pos' ? PDF_COR.pos : PDF_COR.neg;
         return [
           { v: r.eixo.nome, estilo: 'bold' },
-          { v: dom.code, cor: r.dominante === 'pos' ? PDF_COR.pos : PDF_COR.neg, estilo: 'bold' },
-          { v: pct(pDom), al: 'right', estilo: 'bold' },
+          { v: mudo ? `— (${dom.code})` : dom.code, cor: corDom, estilo: mudo ? 'normal' : 'bold' },
+          { v: r.faixa.rotulo, cor: frouxo ? PDF_COR.destaque : PDF_COR.fraca, estilo: frouxo ? 'bold' : 'normal' },
+          { v: pct(pDom), al: 'right', cor: mudo ? PDF_COR.fraca : PDF_COR.tinta, estilo: mudo ? 'normal' : 'bold' },
           { v: out.code, cor: PDF_COR.fraca },
           { v: pct(100 - pDom), al: 'right', cor: PDF_COR.fraca },
-          { v: r.faixa.rotulo, cor: PDF_COR.fraca },
+          { v: `${(r.intensidade * 100).toFixed(1).replace('.', ',')}`, al: 'right', cor: PDF_COR.fraca },
         ];
       }),
     );
     ctx.y += 2;
+    const frouxos = res.eixos.filter((r) => r.intensidade < LIMIAR_CLARO);
+    if (frouxos.length) {
+      ctx.texto(
+        `Leia com ressalva ${frouxos.length === 1 ? 'o eixo' : 'os eixos'} ${frouxos
+          .map((r) => r.eixo.nome)
+          .join(', ')}: ${
+          frouxos.length === 1 ? 'ficou' : 'ficaram'
+        } sem tendência clara, a poucos pontos do empate. ${FAIXAS[1].nota}`,
+        { tam: 9, estilo: 'bold', cor: PDF_COR.destaque },
+      );
+      ctx.y += 2;
+    }
     res.eixos.forEach((r) => {
       const dom = r.dominante === 'pos' ? r.eixo.pos : r.eixo.neg;
-      ctx.texto(`${r.eixo.nome} — ${dom.code}: ${dom.desc}`, { tam: 8.5, cor: PDF_COR.fraca });
+      if (r.intensidade < LIMIAR_INDIFERENCIADO) {
+        ctx.texto(`${r.eixo.nome} — indiferenciado: os dois polos apareceram praticamente empatados.`, {
+          tam: 8.5,
+          cor: PDF_COR.fraca,
+        });
+      } else {
+        ctx.texto(`${r.eixo.nome} — ${dom.code}: ${dom.desc}`, { tam: 8.5, cor: PDF_COR.fraca });
+      }
       ctx.y += 1;
     });
     if (res.alerta) {
@@ -395,37 +421,51 @@ async function gerarPdf() {
       ctx.texto('Atenção: ' + res.alerta, { tam: 9, estilo: 'bold', cor: PDF_COR.neg });
     }
 
-    /* ---------- como o tipo foi escolhido ---------- */
+    /* ---------- reconciliacao: respostas x tipo x regras ---------- */
     ctx.espaco(10, 40);
     ctx.olho('Como o tipo foi escolhido');
-    ctx.titulo('Sua resposta contra a linha da tabela');
+    ctx.titulo('Onde as suas respostas e o seu tipo não coincidem');
     ctx.texto(
       tip.exato
         ? `A sua assinatura bate exatamente com a linha de ${tip.exato.tipo} na tabela dos 16 tipos.`
         : 'A sua assinatura de seis polos não existe na tabela — o caso mais comum, já que a tabela cobre 16 das 64 combinações possíveis. O tipo escolhido é a melhor aproximação, usando a ordem de prioridade dos eixos.',
       { tam: 9, cor: PDF_COR.fraca },
     );
+    tip.reconciliacao.forEach((f) => ctx.texto(f, { tam: 9, cor: PDF_COR.fraca }));
     ctx.y += 3;
+    const chkPorEixo = {};
+    tip.checagens.forEach((c) => (chkPorEixo[c.eixoId] = c));
     ctx.tabela(
       [
         { t: 'Pri.', w: 12 },
-        { t: 'Eixo', w: 32 },
-        { t: 'O tipo pede', w: 38 },
+        { t: 'Eixo', w: 26 },
         { t: 'Você respondeu', w: 38 },
-        { t: 'No polo do tipo', w: 30, al: 'right' },
-        { t: '', w: 24 },
+        { t: `Linha de ${v.tipo}`, w: 34 },
+        { t: 'A regra prevê', w: 38, al: 'left' },
+        { t: 'Resposta × tipo', w: 26 },
       ],
-      v.linhas.map((l) => [
-        { v: String(l.prioridade), cor: PDF_COR.fraca },
-        { v: l.eixoNome },
-        { v: l.esperado, estilo: 'bold' },
-        { v: l.observado, cor: l.bate ? PDF_COR.tinta : PDF_COR.neg },
-        { v: pct(l.pctEsperado), al: 'right' },
-        {
-          v: l.indefinido ? 'indefinido' : l.bate ? 'converge' : 'diverge',
-          cor: l.indefinido ? PDF_COR.fraca : l.bate ? PDF_COR.pos : PDF_COR.neg,
-        },
-      ]),
+      v.linhas.map((l) => {
+        const c = chkPorEixo[l.eixoId];
+        return [
+          { v: String(l.prioridade), cor: PDF_COR.fraca },
+          { v: l.eixoNome },
+          {
+            v: `${l.observado} — ${pct(l.pctObservado)}, ${l.faixa.toLowerCase()}`,
+            estilo: 'bold',
+            cor: l.firme ? PDF_COR.tinta : PDF_COR.destaque,
+          },
+          { v: `${l.esperado} — ${pct(l.pctEsperado)}`, cor: PDF_COR.fraca },
+          { v: c ? c.previsto : 'eixo livre', cor: c ? PDF_COR.tinta : PDF_COR.fraca },
+          {
+            v: l.indefinido ? 'indiferenciado' : l.bate ? 'coincide' : 'difere',
+            cor: l.indefinido ? PDF_COR.fraca : l.bate ? PDF_COR.pos : PDF_COR.neg,
+          },
+        ];
+      }),
+    );
+    ctx.texto(
+      'A última coluna compara a sua resposta com a linha do tipo, não com a regra. A coluna “a regra prevê” só existe nos dois eixos deriváveis, detalhados adiante.',
+      { tam: 8.5, cor: PDF_COR.fraca },
     );
     ctx.texto(`${tip.calibragem.nome} — ordem em uso: ${tip.ordemUsada.detalhe}.`, { tam: 8.5, cor: PDF_COR.fraca });
     if (tip.universal) {
@@ -437,25 +477,48 @@ async function gerarPdf() {
       );
     }
 
-    /* ---------- checagens ---------- */
-    ctx.espaco(8, 40);
-    ctx.olho('Checagens de coerência');
+    /* ---------- os dois eixos derivaveis ---------- */
+    ctx.espaco(8, 60);
+    ctx.olho('Os dois eixos deriváveis');
     ctx.texto(
-      'A tabela dos 16 tipos tem seis colunas, mas só quatro graus de liberdade: Enfoque e Postura são deriváveis dos outros eixos em todas as 16 linhas. Isso permite usá-los como controle de consistência da sua resposta.',
+      `A tabela tem seis colunas e apenas quatro graus de liberdade: ${tip.checagens
+        .map((c) => c.eixoNome)
+        .join(
+          ' e ',
+        )} são previsíveis a partir dos outros quatro em todas as 16 linhas. Abaixo, a previsão de cada regra contra a sua resposta. Isto não avalia o seu tipo — avalia a firmeza das suas respostas.`,
       { tam: 9, cor: PDF_COR.fraca },
     );
     ctx.y += 2;
     tip.checagens.forEach((c) => {
-      ctx.texto(`${c.nome} — ${c.ok ? 'coerente' : 'incoerente'}`, {
-        tam: 9,
-        estilo: 'bold',
-        cor: c.ok ? PDF_COR.pos : PDF_COR.neg,
-      });
-      ctx.texto(`${c.regra} Pelos seus outros eixos, o esperado era ${c.esperado}; você respondeu ${c.observado}.`, {
-        tam: 8.5,
-        cor: PDF_COR.fraca,
-      });
-      ctx.y += 2;
+      const tom = c.veredito.tom === 'pos' ? PDF_COR.pos : c.veredito.tom === 'neg' ? PDF_COR.destaque : PDF_COR.fraca;
+      ctx.espaco(4, 34);
+      ctx.texto(`${c.eixoNome} — ${c.veredito.rotulo}`, { tam: 9.5, estilo: 'bold', cor: tom });
+      ctx.texto(
+        `A regra prevê ${c.eixoNome} a partir de ${c.entradas
+          .map((e) => e.eixoNome)
+          .join(' × ')}. As suas respostas nesses eixos dão ${c.entradas
+          .map((e) => `${e.polo} em ${e.eixoNome} (${pct(e.pct)}, ${e.faixa.toLowerCase()})`)
+          .join(
+            ' + ',
+          )}, cruzamento que prevê ${c.previsto}; você respondeu ${c.observado} com ${pct(c.pctObservado)}.`,
+        { tam: 8.5, cor: PDF_COR.tinta },
+      );
+      if (c.eloFraco) {
+        ctx.texto(
+          c.bate
+            ? `Bateu, mas ${c.eloFraco.eixoNome} ficou em ${pct(c.eloFraco.pct)} (${c.eloFraco.faixa.toLowerCase()}), então a coincidência diz pouco.`
+            : `Elo fraco: ${c.eloFraco.eixoNome}, ${pct(
+                c.eloFraco.pct,
+              )} — ${c.eloFraco.faixa.toLowerCase()}. É esse eixo que vira a previsão, e ele pode cair do outro lado numa reaplicação.`,
+          { tam: 8.5, estilo: 'bold', cor: tom },
+        );
+      }
+      ctx.texto(c.veredito.resumo, { tam: 8.5, cor: PDF_COR.fraca });
+      ctx.texto(
+        `Na tabela, ${v.tipo} é ${c.tipoAtribuido} nesse eixo e satisfaz a regra — como todas as 16 linhas. ${c.regra}`,
+        { tam: 8.5, cor: PDF_COR.fraca },
+      );
+      ctx.y += 2.5;
     });
 
     /* ---------- ranking ---------- */
